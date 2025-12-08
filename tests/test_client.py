@@ -1,0 +1,132 @@
+import pytest
+from unittest.mock import MagicMock, patch
+from agent_framework import ChatMessage, Role, ChatOptions
+import agent_framework_mlx.client
+from agent_framework_mlx import MLXChatClient, MLXGenerationConfig
+
+@pytest.mark.asyncio
+async def test_client_initialization(mock_mlx):
+    config = MLXGenerationConfig(temp=0.5, max_tokens=500)
+    client = MLXChatClient(model_path="test/model", generation_config=config)
+    
+    assert client.generation_config.temp == 0.5
+    assert client.model_id == "test/model"
+
+@pytest.mark.asyncio
+async def test_client_init_no_tokenizer(mock_mlx):
+    agent_framework_mlx.client.load.return_value = (MagicMock(), None)
+    
+    with pytest.raises(ValueError, match="Failed to load tokenizer"):
+        MLXChatClient(model_path="test/model")
+
+@pytest.mark.asyncio
+async def test_sampler_configuration(mock_mlx):
+    client = MLXChatClient(model_path="test/model")
+    options = ChatOptions(
+        temperature=0.7,
+        top_p=0.9,
+        additional_properties={
+            "min_p": 0.05,
+            "top_k": 50,
+            "xtc_probability": 0.1,
+            "xtc_threshold": 0.5
+        }
+    )
+    
+    client._get_sampler(options)
+    
+    agent_framework_mlx.client.make_sampler.assert_called_with(
+        temp=0.7,
+        top_p=0.9,
+        min_p=0.05,
+        min_tokens_to_keep=1, # default
+        top_k=50,
+        xtc_probability=0.1,
+        xtc_threshold=0.5
+    )
+
+@pytest.mark.asyncio
+async def test_logits_processors_configuration(mock_mlx):
+    client = MLXChatClient(model_path="test/model")
+    options = ChatOptions(
+        additional_properties={
+            "repetition_penalty": 1.2,
+            "repetition_context_size": 50
+        }
+    )
+    
+    client._get_logits_processors(options)
+    
+    agent_framework_mlx.client.make_logits_processors.assert_called_with(
+        repetition_penalty=1.2,
+        repetition_context_size=50
+    )
+
+@pytest.mark.asyncio
+async def test_seed_parameter(mock_mlx):
+    client = MLXChatClient(model_path="test/model")
+    options = ChatOptions(additional_properties={"seed": 42})
+    messages = [ChatMessage(role=Role.USER, text="Hi")]
+
+    await client._inner_get_response(messages=messages, chat_options=options)
+    
+    # Check generate call kwargs
+    args, kwargs = agent_framework_mlx.client.generate.call_args
+    assert kwargs["seed"] == 42
+
+@pytest.mark.asyncio
+async def test_streaming_error_propagation(mock_mlx):
+    client = MLXChatClient(model_path="test/model")
+    messages = [ChatMessage(role=Role.USER, text="Hi")]
+    
+    # Mock stream_generate to raise an exception
+    def mock_stream_error(*args, **kwargs):
+        raise RuntimeError("Generation failed")
+        yield
+        
+    with patch("agent_framework_mlx.client.stream_generate", side_effect=mock_stream_error):
+        with pytest.raises(RuntimeError, match="Generation failed"):
+            async for _ in client._inner_get_streaming_response(
+                messages=messages, 
+                chat_options=ChatOptions()
+            ):
+                pass
+
+@pytest.mark.asyncio
+async def test_prepare_prompt_fallback(mock_mlx):
+    # Setup tokenizer without apply_chat_template
+    # We can just create a client and swap the tokenizer
+    client = MLXChatClient(model_path="test/model")
+    client.tokenizer = MagicMock(spec=[])
+    
+    messages = [ChatMessage(role=Role.USER, text="Hi")]
+    prompt = client._prepare_prompt(messages)
+    
+    assert prompt == "user: Hi"
+
+@pytest.mark.asyncio
+async def test_get_response(mock_mlx):
+    client = MLXChatClient(model_path="test/model")
+    messages = [ChatMessage(role=Role.USER, text="Hi")]
+    
+    response = await client._inner_get_response(
+        messages=messages, 
+        chat_options=ChatOptions()
+    )
+    
+    assert response.messages[0].contents[0].text == "Mock Output"
+    assert response.model_id == "test/model"
+
+@pytest.mark.asyncio
+async def test_streaming_response(mock_mlx):
+    client = MLXChatClient(model_path="test/model")
+    messages = [ChatMessage(role=Role.USER, text="Hi")]
+    
+    response_text = ""
+    async for update in client._inner_get_streaming_response(
+        messages=messages, 
+        chat_options=ChatOptions()
+    ):
+        response_text += update.text
+        
+    assert response_text == "Mock Chunk"
