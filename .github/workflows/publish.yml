@@ -7,7 +7,7 @@ on:
 jobs:
   pypi-publish:
     name: Build and upload to PyPI
-    runs-on: ubuntu-latest
+    runs-on: macos-26
     permissions:
       id-token: write
 
