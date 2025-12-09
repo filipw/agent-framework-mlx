@@ -105,6 +105,23 @@ async def test_prepare_prompt_fallback(mock_mlx):
     assert prompt == "user: Hi"
 
 @pytest.mark.asyncio
+async def test_message_preprocessor(mock_mlx):
+    def add_instruction(messages):
+        if messages:
+            messages[-1]["content"] += " [INSTRUCTION]"
+        return messages
+
+    client = MLXChatClient(model_path="test/model", message_preprocessor=add_instruction)
+    messages = [ChatMessage(role=Role.USER, text="Hi")]
+    
+    await client._inner_get_response(messages=messages, chat_options=ChatOptions())
+    
+    call_args = client.tokenizer.apply_chat_template.call_args
+    assert call_args is not None
+    passed_msgs = call_args[0][0]
+    assert passed_msgs[0]["content"] == "Hi [INSTRUCTION]"
+
+@pytest.mark.asyncio
 async def test_get_response(mock_mlx):
     client = MLXChatClient(model_path="test/model")
     messages = [ChatMessage(role=Role.USER, text="Hi")]

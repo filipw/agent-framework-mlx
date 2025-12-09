@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Any, AsyncIterable, MutableSequence, Optional, cast
+from typing import Any, AsyncIterable, MutableSequence, Optional, cast, Callable
 
 from pydantic import BaseModel
 
@@ -47,11 +47,13 @@ class MLXChatClient(BaseChatClient):
         adapter_path: Optional[str] = None,
         tokenizer_config: Optional[dict] = None,
         generation_config: Optional[MLXGenerationConfig] = None,
+        message_preprocessor: Optional[Callable[[list[dict[str, str]]], list[dict[str, str]]]] = None,
         **kwargs: Any
     ):
         super().__init__(**kwargs)
         
         self.generation_config = generation_config or MLXGenerationConfig()
+        self.message_preprocessor = message_preprocessor
         
         logger.info(f"Loading MLX Model: {model_path}...")
         loaded = load(
@@ -94,6 +96,9 @@ class MLXChatClient(BaseChatClient):
             content_str = m.text if hasattr(m, "text") else str(m.contents)
             
             msg_dicts.append({"role": role_str, "content": content_str})
+
+        if self.message_preprocessor:
+            msg_dicts = self.message_preprocessor(msg_dicts)
 
         if self.tokenizer is not None and hasattr(self.tokenizer, "apply_chat_template"):
             return self.tokenizer.apply_chat_template(
