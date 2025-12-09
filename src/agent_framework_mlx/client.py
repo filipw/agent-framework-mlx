@@ -1,19 +1,8 @@
 import asyncio
 import logging
-from typing import Any, AsyncIterable, MutableSequence, Optional, cast, Callable
-
+from typing import Any, AsyncIterable, MutableSequence, Optional, Callable
 from pydantic import BaseModel
-
-from agent_framework import (
-    BaseChatClient,
-    ChatMessage,
-    ChatResponse,
-    ChatResponseUpdate,
-    ChatOptions,
-    Role,
-    TextContent,
-)
-
+from agent_framework import BaseChatClient, ChatMessage, ChatOptions, ChatResponse, ChatResponseUpdate, Role, TextContent
 from mlx_lm.utils import load
 from mlx_lm.generate import generate, stream_generate
 from mlx_lm.sample_utils import make_sampler, make_logits_processors
