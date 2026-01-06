@@ -1,8 +1,23 @@
 import asyncio
 import logging
-from typing import Any, AsyncIterable, MutableSequence, Optional, Callable
+from typing import Any, AsyncIterable, MutableSequence, Optional, Callable, ClassVar
 from pydantic import BaseModel
-from agent_framework import BaseChatClient, ChatMessage, ChatOptions, ChatResponse, ChatResponseUpdate, Role, TextContent
+from agent_framework import (
+    BaseChatClient, 
+    ChatMessage, 
+    ChatOptions, 
+    ChatResponse, 
+    ChatResponseUpdate, 
+    Role, 
+    TextContent,
+    UsageDetails,
+    UsageContent,
+    use_chat_middleware,
+    use_function_invocation
+)
+from agent_framework.observability import use_instrumentation
+from agent_framework._pydantic import AFBaseSettings
+from agent_framework.exceptions import ServiceInitializationError
 from mlx_lm.utils import load
 from mlx_lm.generate import generate, stream_generate
 from mlx_lm.sample_utils import make_sampler, make_logits_processors
@@ -25,29 +40,55 @@ class MLXGenerationConfig(BaseModel):
     seed: Optional[int] = None
     verbose: bool = False
 
+class MLXSettings(AFBaseSettings):
+    """
+    MLX Client settings.
+    
+    Attributes:
+        model_path: The path to the MLX model. (Env var MLX_MODEL_PATH)
+        adapter_path: Optional path to an adapter. (Env var MLX_ADAPTER_PATH)
+    """
+    env_prefix: ClassVar[str] = "MLX_"
+    
+    model_path: str
+    adapter_path: Optional[str] = None
+
+@use_function_invocation
+@use_instrumentation
+@use_chat_middleware
 class MLXChatClient(BaseChatClient):
     """
     A Chat Client that runs models locally using Apple MLX.
     """
+    OTEL_PROVIDER_NAME = "mlx_local"
 
     def __init__(
         self, 
-        model_path: str, 
+        model_path: Optional[str] = None, 
         adapter_path: Optional[str] = None,
         tokenizer_config: Optional[dict] = None,
         generation_config: Optional[MLXGenerationConfig] = None,
         message_preprocessor: Optional[Callable[[list[dict[str, str]]], list[dict[str, str]]]] = None,
+        env_file_path: Optional[str] = None,
+        env_file_encoding: str = "utf-8",
         **kwargs: Any
     ):
+        settings = MLXSettings(
+            model_path=model_path, # type: ignore
+            adapter_path=adapter_path,
+            env_file_path=env_file_path,
+            env_file_encoding=env_file_encoding
+        )
+
         super().__init__(**kwargs)
         
         self.generation_config = generation_config or MLXGenerationConfig()
         self.message_preprocessor = message_preprocessor
         
-        logger.info(f"Loading MLX Model: {model_path}...")
+        logger.info(f"Loading MLX Model: {settings.model_path}...")
         loaded = load(
-            model_path,
-            adapter_path=adapter_path,
+            settings.model_path,
+            adapter_path=settings.adapter_path,
             tokenizer_config=tokenizer_config or {}
         ) # type: ignore
         
@@ -60,9 +101,9 @@ class MLXChatClient(BaseChatClient):
             self.tokenizer = None 
 
         if self.tokenizer is None:
-            raise ValueError("Failed to load tokenizer from model path.")
+            raise ServiceInitializationError("Failed to load tokenizer from model path.")
 
-        self.model_id = model_path
+        self.model_id = settings.model_path
 
     def _prepare_prompt(self, messages: list[ChatMessage]) -> str:
         """
@@ -190,16 +231,26 @@ class MLXChatClient(BaseChatClient):
             contents=[content]
         )
 
-        # 3. Create ChatResponse
+        # 3. Calculate usage
+        prompt_tokens = len(self.tokenizer.encode(prompt)) # type: ignore
+        completion_tokens = len(self.tokenizer.encode(response_text)) # type: ignore
+        usage = UsageDetails(
+            input_token_count=prompt_tokens,
+            output_token_count=completion_tokens,
+            total_token_count=prompt_tokens + completion_tokens
+        )
+
+        # 4. Create ChatResponse
         return ChatResponse(
             messages=[message],
-            model_id=self.model_id
+            model_id=self.model_id,
+            usage_details=usage
         )
 
     async def _inner_get_streaming_response(
         self, 
         *, 
-        messages: MutableSequence[ChatMessage], 
+        messages: MutableSequence[ChatMessage],  
         chat_options: ChatOptions, 
         **kwargs: Any
     ) -> AsyncIterable[ChatResponseUpdate]:
@@ -247,6 +298,8 @@ class MLXChatClient(BaseChatClient):
         thread.start()
 
         # Consume from the queue
+        last_usage = None
+
         while True:
             item = await queue.get()
             if item is None:
@@ -254,10 +307,26 @@ class MLXChatClient(BaseChatClient):
             if isinstance(item, Exception):
                 raise item
             
+            # Extract usage if available
+            if hasattr(item, "prompt_tokens") and hasattr(item, "generation_tokens"):
+                last_usage = UsageDetails(
+                    input_token_count=item.prompt_tokens,
+                    output_token_count=item.generation_tokens,
+                    total_token_count=item.prompt_tokens + item.generation_tokens
+                )
+
             content = TextContent(text=item.text)
             
             yield ChatResponseUpdate(
                 role=Role.ASSISTANT, 
                 contents=[content], 
+                model_id=self.model_id
+            )
+        
+        # Yield usage at the end if we captured it
+        if last_usage:
+            yield ChatResponseUpdate(
+                role=Role.ASSISTANT,
+                contents=[UsageContent(details=last_usage)],
                 model_id=self.model_id
             )

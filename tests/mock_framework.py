@@ -1,5 +1,14 @@
-from typing import Any, List, Optional, Union
+from typing import Any, List, Optional, Union, ClassVar
 from pydantic import BaseModel, ConfigDict
+
+def use_chat_middleware(cls):
+    return cls
+
+def use_function_invocation(cls):
+    return cls
+
+def use_instrumentation(cls):
+    return cls
 
 class Role:
     value: str
@@ -30,6 +39,17 @@ class TextContent(BaseContent):
     def __init__(self, text: str, **kwargs):
         super().__init__(text=text, **kwargs)
 
+
+class UsageDetails(BaseModel):
+    input_token_count: Optional[int] = None
+    output_token_count: Optional[int] = None
+    total_token_count: Optional[int] = None
+
+class UsageContent(BaseContent):
+    details: UsageDetails
+    def __init__(self, details: UsageDetails, **kwargs):
+        super().__init__(details=details, **kwargs)
+
 class ChatMessage:
     """A plain python class to mock the Framework's non-Pydantic ChatMessage."""
     def __init__(self, role: Union[Role, str], contents: List[Any] = None, text: str = None):
@@ -51,6 +71,7 @@ class ChatOptions(BaseModel):
 class ChatResponse(BaseModel):
     messages: List[ChatMessage]
     model_id: str
+    usage_details: Optional[UsageDetails] = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
 class ChatResponseUpdate(BaseModel):
@@ -71,4 +92,12 @@ class BaseChatClient:
     async def get_response(self, *args, **kwargs):
         pass
 
-Contents = Union[TextContent, BaseContent]
+class AFBaseSettings(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    env_prefix: ClassVar[str] = ""
+
+
+class ServiceInitializationError(Exception):
+    pass
+
+Contents = Union[TextContent, BaseContent, UsageContent]

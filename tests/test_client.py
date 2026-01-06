@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 from agent_framework import ChatMessage, Role, ChatOptions
+from agent_framework.exceptions import ServiceInitializationError
 import agent_framework_mlx.client
 from agent_framework_mlx import MLXChatClient, MLXGenerationConfig
 
@@ -16,7 +17,7 @@ async def test_client_initialization(mock_mlx):
 async def test_client_init_no_tokenizer(mock_mlx):
     agent_framework_mlx.client.load.return_value = (MagicMock(), None)
     
-    with pytest.raises(ValueError, match="Failed to load tokenizer"):
+    with pytest.raises(ServiceInitializationError, match="Failed to load tokenizer"):
         MLXChatClient(model_path="test/model")
 
 @pytest.mark.asyncio
@@ -116,7 +117,7 @@ async def test_message_preprocessor(mock_mlx):
     
     await client._inner_get_response(messages=messages, chat_options=ChatOptions())
     
-    call_args = client.tokenizer.apply_chat_template.call_args
+    call_args = client.tokenizer.apply_chat_template.call_args #type: ignore
     assert call_args is not None
     passed_msgs = call_args[0][0]
     assert passed_msgs[0]["content"] == "Hi [INSTRUCTION]"
@@ -131,7 +132,7 @@ async def test_get_response(mock_mlx):
         chat_options=ChatOptions()
     )
     
-    assert response.messages[0].contents[0].text == "Mock Output"
+    assert response.messages[0].contents[0].text == "Mock Output" #type: ignore
     assert response.model_id == "test/model"
 
 @pytest.mark.asyncio
