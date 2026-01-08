@@ -5,6 +5,8 @@ This library provides an [Apple MLX LM](https://github.com/ml-explore/mlx-lm) ba
 ## Features
 
 - **Local Inference**: Run models directly on your Mac using Apple Silicon
+- **Tool Calling**: Native support for agentic tool invocation.
+- **Observability**: Built-in OpenTelemetry tracing, metrics, and token usage tracking.
 - **Streaming Support**: Full support for streaming responses.
 - **Configurable Generation**: Fine-tune generation parameters like temperature, top-p, repetition penalty, and more.
 - **Message Preprocessing**: Hook into the pipeline to modify messages before they are converted to prompts.
@@ -55,16 +57,39 @@ response = await client.get_response(messages=messages, chat_options=ChatOptions
 print(response.text)
 ```
 
-You can also use the client as backbone for Agent Framework agents when building agentic workflows:
+### Agent with Tools
+
+You can easily create agents capable of calling tools (Python functions) using the client:
+
+```python
+from typing import Annotated
+
+def calculate_bmi(weight: float, height: float) -> str:
+    """Calculates BMI."""
+    return f"{weight / (height ** 2):.2f}"
+
+# Create an agent with the tool
+agent = client.create_agent(
+    name="HealthAssistant",
+    instructions="You are a helpful assistant.",
+    tools=[calculate_bmi]
+)
+
+response = await agent.run("Calculate BMI for 70kg and 1.75m")
+print(response)
+```
+
+### Workflow Integration
+
+You can use the client as backbone for Agent Framework agents when building agentic workflows:
 
 ```python
 from agent_framework import ChatAgent
 
 # notice the client constructed in the previous example now backs the local agent
-local_agent = ChatAgent(
+local_agent = client.create_agent(
     name="Local_MLX",
-    instructions="You are a helpful assistant.",
-    chat_client=client
+    instructions="You are a helpful assistant."
 )
 
 remote_agent = ChatAgent(
@@ -90,6 +115,19 @@ workflow = builder.build()
 ```python
 async for update in client.get_streaming_response(messages=messages, chat_options=ChatOptions()):
     print(update.text, end="", flush=True)
+```
+
+### Configuration
+
+You can configure the client using environment variables or a `.env` file. Using environment variables like `MLX_MODEL_PATH` allows you to omit arguments in code.
+
+```bash
+export MLX_MODEL_PATH="mlx-community/Phi-4-mini-instruct-4bit"
+```
+
+```python
+# No arguments needed if env vars are set
+client = MLXChatClient()
 ```
 
 ### Advanced Configuration
