@@ -1,4 +1,4 @@
-from typing import Any, List, Optional, Union, ClassVar
+from typing import Any, List, Optional, Union, ClassVar, TypedDict
 from pydantic import BaseModel, ConfigDict
 
 def use_chat_middleware(cls):
@@ -31,57 +31,65 @@ Role.SYSTEM = Role("system")
 Role.USER = Role("user")
 Role.ASSISTANT = Role("assistant")
 
-class BaseContent(BaseModel):
+class Content(BaseModel):
+    type: str
+    text: Optional[str] = None
+    usage_details: Optional[dict[str, Any]] = None
+
+    @classmethod
+    def from_text(cls, text: str):
+        return cls(type="text", text=text)
+    
+    @classmethod
+    def from_usage(cls, usage_details: dict[str, Any]):
+        return cls(type="usage", usage_details=usage_details)
+
+class UsageDetails(dict):
     pass
-
-class TextContent(BaseContent):
-    text: str
-    def __init__(self, text: str, **kwargs):
-        super().__init__(text=text, **kwargs)
-
-
-class UsageDetails(BaseModel):
-    input_token_count: Optional[int] = None
-    output_token_count: Optional[int] = None
-    total_token_count: Optional[int] = None
-
-class UsageContent(BaseContent):
-    details: UsageDetails
-    def __init__(self, details: UsageDetails, **kwargs):
-        super().__init__(details=details, **kwargs)
 
 class ChatMessage:
     """A plain python class to mock the Framework's non-Pydantic ChatMessage."""
     def __init__(self, role: Union[Role, str], contents: List[Any] = None, text: str = None):
+        if isinstance(role, dict):
+             # Handle possible dict role
+             role = Role(role.get("value", "user"))
+        elif isinstance(role, str):
+            role = Role(role)
         self.role = role
         self.contents = contents or []
         if text:
-            self.contents.append(TextContent(text=text))
+            self.contents.append(Content.from_text(text=text))
     
     @property
     def text(self):
-        return "".join([c.text for c in self.contents if isinstance(c, TextContent)])
+        return "".join([c.text for c in self.contents if c.type == "text" and c.text is not None])
 
-class ChatOptions(BaseModel):
-    temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
-    top_p: Optional[float] = None
-    additional_properties: Optional[dict] = {}
+class ChatOptions(TypedDict, total=False):
+    temperature: Optional[float]
+    max_tokens: Optional[int]
+    top_p: Optional[float]
+    seed: Optional[int]
+    min_p: Optional[float]
+    top_k: Optional[int]
+    xtc_probability: Optional[float]
+    xtc_threshold: Optional[float]
+    repetition_penalty: Optional[float]
+    repetition_context_size: Optional[int]
 
 class ChatResponse(BaseModel):
     messages: List[ChatMessage]
     model_id: str
-    usage_details: Optional[UsageDetails] = None
+    usage_details: Optional[dict[str, Any]] = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
 class ChatResponseUpdate(BaseModel):
-    role: Union[Role, str] 
+    role: Optional[Union[Role, str]] = None
     contents: List[Any]
     model_id: str
     
     @property
     def text(self):
-        return "".join([c.text for c in self.contents if isinstance(c, TextContent)])
+        return "".join([c.text for c in self.contents if c.type == "text" and c.text is not None])
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -100,4 +108,4 @@ class AFBaseSettings(BaseModel):
 class ServiceInitializationError(Exception):
     pass
 
-Contents = Union[TextContent, BaseContent, UsageContent]
+Contents = Union[Content]

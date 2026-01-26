@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Any, AsyncIterable, MutableSequence, Optional, Callable, ClassVar
+from typing import Any, AsyncIterable, MutableSequence, Optional, Callable, ClassVar, TypedDict
 from pydantic import BaseModel
 from agent_framework import (
     BaseChatClient, 
@@ -9,9 +9,8 @@ from agent_framework import (
     ChatResponse, 
     ChatResponseUpdate, 
     Role, 
-    TextContent,
+    Content,
     UsageDetails,
-    UsageContent,
     use_chat_middleware,
     use_function_invocation
 )
@@ -52,6 +51,15 @@ class MLXSettings(AFBaseSettings):
     
     model_path: str
     adapter_path: Optional[str] = None
+
+class MLXChatOptions(ChatOptions, total=False):
+    """MLX-specific Chat Options."""
+    min_p: float
+    top_k: int
+    xtc_probability: float
+    xtc_threshold: float
+    repetition_penalty: float
+    repetition_context_size: int
 
 @use_function_invocation
 @use_instrumentation
@@ -140,24 +148,25 @@ class MLXChatClient(BaseChatClient):
         # Fallback
         return "\n".join([f"{m['role']}: {m['content']}" for m in msg_dicts])
 
-    def _get_sampler(self, options: Optional[ChatOptions] = None):
+    def _get_sampler(self, options: Optional[MLXChatOptions] = None):
         """Creates the MLX sampler, overriding defaults with ChatOptions if provided."""
         config = self.generation_config.model_dump()
         
         if options:
-            if options.temperature is not None:
-                config["temp"] = options.temperature
-            if options.top_p is not None:
-                config["top_p"] = options.top_p
-            if options.additional_properties:
-                if "min_p" in options.additional_properties:
-                    config["min_p"] = float(options.additional_properties["min_p"])
-                if "top_k" in options.additional_properties:
-                    config["top_k"] = int(options.additional_properties["top_k"])
-                if "xtc_probability" in options.additional_properties:
-                    config["xtc_probability"] = float(options.additional_properties["xtc_probability"])
-                if "xtc_threshold" in options.additional_properties:
-                    config["xtc_threshold"] = float(options.additional_properties["xtc_threshold"])
+            if options.get("temperature") is not None:
+                config["temp"] = options["temperature"]
+            if options.get("top_p") is not None:
+                config["top_p"] = options["top_p"]
+            
+            # Additional properties are now directly in the TypedDict
+            if "min_p" in options:
+                config["min_p"] = float(options["min_p"])
+            if "top_k" in options:
+                config["top_k"] = int(options["top_k"])
+            if "xtc_probability" in options:
+                config["xtc_probability"] = float(options["xtc_probability"])
+            if "xtc_threshold" in options:
+                config["xtc_threshold"] = float(options["xtc_threshold"])
 
         return make_sampler(
             temp=config["temp"],
@@ -169,15 +178,15 @@ class MLXChatClient(BaseChatClient):
             xtc_threshold=config["xtc_threshold"]
         )
 
-    def _get_logits_processors(self, options: Optional[ChatOptions] = None):
+    def _get_logits_processors(self, options: Optional[MLXChatOptions] = None):
         """Creates the MLX logits processors."""
         config = self.generation_config.model_dump()
         
-        if options and options.additional_properties:
-            if "repetition_penalty" in options.additional_properties:
-                config["repetition_penalty"] = float(options.additional_properties["repetition_penalty"])
-            if "repetition_context_size" in options.additional_properties:
-                config["repetition_context_size"] = int(options.additional_properties["repetition_context_size"])
+        if options:
+            if "repetition_penalty" in options:
+                config["repetition_penalty"] = float(options["repetition_penalty"])
+            if "repetition_context_size" in options:
+                config["repetition_context_size"] = int(options["repetition_context_size"])
 
         return make_logits_processors(
             repetition_penalty=config.get("repetition_penalty"),
@@ -188,7 +197,7 @@ class MLXChatClient(BaseChatClient):
         self, 
         *, 
         messages: MutableSequence[ChatMessage], 
-        chat_options: ChatOptions, 
+        options: MLXChatOptions, 
         **kwargs: Any
     ) -> ChatResponse:
         
@@ -196,15 +205,15 @@ class MLXChatClient(BaseChatClient):
              raise ValueError("Tokenizer is not initialized.")
 
         prompt = self._prepare_prompt(list(messages))
-        sampler = self._get_sampler(chat_options)
-        logits_processors = self._get_logits_processors(chat_options)
+        sampler = self._get_sampler(options)
+        logits_processors = self._get_logits_processors(options)
         
         # Determine max_tokens: Option -> Config -> Default
-        max_tokens = chat_options.max_tokens if chat_options.max_tokens else self.generation_config.max_tokens
+        max_tokens = options.get("max_tokens") if options.get("max_tokens") else self.generation_config.max_tokens
 
         seed = self.generation_config.seed
-        if chat_options.additional_properties and "seed" in chat_options.additional_properties:
-            seed = int(chat_options.additional_properties["seed"])
+        if "seed" in options:
+            seed = int(options["seed"]) # type: ignore
         
         generate_kwargs = {}
         if seed is not None:
@@ -223,7 +232,7 @@ class MLXChatClient(BaseChatClient):
         )
 
         # 1. Create TextContent
-        content = TextContent(text=response_text)
+        content = Content.from_text(text=response_text)
         
         # 2. Create ChatMessage
         message = ChatMessage(
@@ -251,7 +260,7 @@ class MLXChatClient(BaseChatClient):
         self, 
         *, 
         messages: MutableSequence[ChatMessage],  
-        chat_options: ChatOptions, 
+        options: MLXChatOptions, 
         **kwargs: Any
     ) -> AsyncIterable[ChatResponseUpdate]:
         
@@ -259,13 +268,13 @@ class MLXChatClient(BaseChatClient):
              raise ValueError("Tokenizer is not initialized.")
 
         prompt = self._prepare_prompt(list(messages))
-        sampler = self._get_sampler(chat_options)
-        logits_processors = self._get_logits_processors(chat_options)
-        max_tokens = chat_options.max_tokens if chat_options.max_tokens else self.generation_config.max_tokens
+        sampler = self._get_sampler(options)
+        logits_processors = self._get_logits_processors(options)
+        max_tokens = options.get("max_tokens") if options.get("max_tokens") else self.generation_config.max_tokens
 
         seed = self.generation_config.seed
-        if chat_options.additional_properties and "seed" in chat_options.additional_properties:
-            seed = int(chat_options.additional_properties["seed"])
+        if "seed" in options:
+            seed = int(options["seed"]) # type: ignore
         
         generate_kwargs = {}
         if seed is not None:
@@ -315,7 +324,7 @@ class MLXChatClient(BaseChatClient):
                     total_token_count=item.prompt_tokens + item.generation_tokens
                 )
 
-            content = TextContent(text=item.text)
+            content = Content.from_text(text=item.text)
             
             yield ChatResponseUpdate(
                 role=Role.ASSISTANT, 
@@ -327,6 +336,6 @@ class MLXChatClient(BaseChatClient):
         if last_usage:
             yield ChatResponseUpdate(
                 role=Role.ASSISTANT,
-                contents=[UsageContent(details=last_usage)],
+                contents=[Content.from_usage(usage_details=last_usage)],
                 model_id=self.model_id
             )
