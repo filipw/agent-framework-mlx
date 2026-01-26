@@ -39,7 +39,7 @@ async def main():
     )
     
     # Create the agent
-    agent = client.create_agent(
+    agent = client.as_agent(
         name="HealthAssistant",
         instructions="You are a helpful health assistant. You can calculate BMI.",
         tools=[calculate_bmi]
