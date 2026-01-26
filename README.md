@@ -69,7 +69,7 @@ def calculate_bmi(weight: float, height: float) -> str:
     return f"{weight / (height ** 2):.2f}"
 
 # Create an agent with the tool
-agent = client.create_agent(
+agent = client.as_agent(
     name="HealthAssistant",
     instructions="You are a helpful assistant.",
     tools=[calculate_bmi]
@@ -87,7 +87,7 @@ You can use the client as backbone for Agent Framework agents when building agen
 from agent_framework import ChatAgent
 
 # notice the client constructed in the previous example now backs the local agent
-local_agent = client.create_agent(
+local_agent = client.as_agent(
     name="Local_MLX",
     instructions="You are a helpful assistant."
 )

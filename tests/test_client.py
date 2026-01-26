@@ -4,6 +4,7 @@ from agent_framework import ChatMessage, Role, ChatOptions
 from agent_framework.exceptions import ServiceInitializationError
 import agent_framework_mlx.client
 from agent_framework_mlx import MLXChatClient, MLXGenerationConfig
+from agent_framework_mlx.client import MLXChatOptions
 
 @pytest.mark.asyncio
 async def test_client_initialization(mock_mlx):
@@ -23,15 +24,13 @@ async def test_client_init_no_tokenizer(mock_mlx):
 @pytest.mark.asyncio
 async def test_sampler_configuration(mock_mlx):
     client = MLXChatClient(model_path="test/model")
-    options = ChatOptions(
+    options = MLXChatOptions(
         temperature=0.7,
         top_p=0.9,
-        additional_properties={
-            "min_p": 0.05,
-            "top_k": 50,
-            "xtc_probability": 0.1,
-            "xtc_threshold": 0.5
-        }
+        min_p=0.05,
+        top_k=50,
+        xtc_probability=0.1,
+        xtc_threshold=0.5
     )
     
     client._get_sampler(options)
@@ -49,11 +48,9 @@ async def test_sampler_configuration(mock_mlx):
 @pytest.mark.asyncio
 async def test_logits_processors_configuration(mock_mlx):
     client = MLXChatClient(model_path="test/model")
-    options = ChatOptions(
-        additional_properties={
-            "repetition_penalty": 1.2,
-            "repetition_context_size": 50
-        }
+    options = MLXChatOptions(
+        repetition_penalty=1.2,
+        repetition_context_size=50
     )
     
     client._get_logits_processors(options)
@@ -66,10 +63,10 @@ async def test_logits_processors_configuration(mock_mlx):
 @pytest.mark.asyncio
 async def test_seed_parameter(mock_mlx):
     client = MLXChatClient(model_path="test/model")
-    options = ChatOptions(additional_properties={"seed": 42})
+    options = MLXChatOptions(seed=42)
     messages = [ChatMessage(role=Role.USER, text="Hi")]
 
-    await client._inner_get_response(messages=messages, chat_options=options)
+    await client._inner_get_response(messages=messages, options=options)
     
     # Check generate call kwargs
     args, kwargs = agent_framework_mlx.client.generate.call_args
@@ -89,7 +86,7 @@ async def test_streaming_error_propagation(mock_mlx):
         with pytest.raises(RuntimeError, match="Generation failed"):
             async for _ in client._inner_get_streaming_response(
                 messages=messages, 
-                chat_options=ChatOptions()
+                options=MLXChatOptions()
             ):
                 pass
 
@@ -115,7 +112,7 @@ async def test_message_preprocessor(mock_mlx):
     client = MLXChatClient(model_path="test/model", message_preprocessor=add_instruction)
     messages = [ChatMessage(role=Role.USER, text="Hi")]
     
-    await client._inner_get_response(messages=messages, chat_options=ChatOptions())
+    await client._inner_get_response(messages=messages, options=MLXChatOptions())
     
     call_args = client.tokenizer.apply_chat_template.call_args #type: ignore
     assert call_args is not None
@@ -129,7 +126,7 @@ async def test_get_response(mock_mlx):
     
     response = await client._inner_get_response(
         messages=messages, 
-        chat_options=ChatOptions()
+        options=MLXChatOptions()
     )
     
     assert response.messages[0].contents[0].text == "Mock Output" #type: ignore
@@ -143,7 +140,7 @@ async def test_streaming_response(mock_mlx):
     response_text = ""
     async for update in client._inner_get_streaming_response(
         messages=messages, 
-        chat_options=ChatOptions()
+        options=MLXChatOptions()
     ):
         response_text += update.text
         

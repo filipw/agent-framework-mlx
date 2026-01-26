@@ -5,7 +5,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
 
 try:
-    from agent_framework import ChatMessage, Role, ChatOptions, UsageContent
+    from agent_framework import ChatMessage, Role, ChatOptions, Content
     from agent_framework_mlx import MLXChatClient, MLXGenerationConfig
 except ImportError as e:
     print("Error: Dependencies not found.")
@@ -43,8 +43,8 @@ async def main():
     print(f"🤖 Assistant: {response.text}")
     
     if response.usage_details:
-        print(f"📊 Usage: {response.usage_details.total_token_count} tokens "
-              f"(In: {response.usage_details.input_token_count}, Out: {response.usage_details.output_token_count})")
+        print(f"📊 Usage: {response.usage_details.get('total_token_count')} tokens "
+              f"(In: {response.usage_details.get('input_token_count')}, Out: {response.usage_details.get('output_token_count')})")
 
     print("\n--- 🌊 Running Streaming Generation ---")
     print("🤖 Assistant: ", end="", flush=True)
@@ -54,9 +54,11 @@ async def main():
             print(update.text, end="", flush=True)
         
         for content in update.contents:
-            if isinstance(content, UsageContent):
-                print(f"\n📊 Usage: {content.details.total_token_count} tokens "
-                      f"(In: {content.details.input_token_count}, Out: {content.details.output_token_count})")
+            if content.type == "usage":
+                details = content.usage_details
+                if details:
+                    print(f"\n📊 Usage: {details.get('total_token_count')} tokens "
+                          f"(In: {details.get('input_token_count')}, Out: {details.get('output_token_count')})")
     print("\n")
 
 if __name__ == "__main__":
