@@ -64,7 +64,7 @@ class MLXChatOptions(ChatOptions, total=False):
 @use_function_invocation
 @use_instrumentation
 @use_chat_middleware
-class MLXChatClient(BaseChatClient):
+class MLXChatClient(BaseChatClient[MLXChatOptions]):
     """
     A Chat Client that runs models locally using Apple MLX.
     """
@@ -148,7 +148,7 @@ class MLXChatClient(BaseChatClient):
         # Fallback
         return "\n".join([f"{m['role']}: {m['content']}" for m in msg_dicts])
 
-    def _get_sampler(self, options: Optional[MLXChatOptions] = None):
+    def _get_sampler(self, options: MLXChatOptions = {}):
         """Creates the MLX sampler, overriding defaults with ChatOptions if provided."""
         config = self.generation_config.model_dump()
         
@@ -178,7 +178,7 @@ class MLXChatClient(BaseChatClient):
             xtc_threshold=config["xtc_threshold"]
         )
 
-    def _get_logits_processors(self, options: Optional[MLXChatOptions] = None):
+    def _get_logits_processors(self, options: MLXChatOptions = {}):
         """Creates the MLX logits processors."""
         config = self.generation_config.model_dump()
         
@@ -197,7 +197,7 @@ class MLXChatClient(BaseChatClient):
         self, 
         *, 
         messages: MutableSequence[ChatMessage], 
-        options: MLXChatOptions, 
+        options: MLXChatOptions = {}, 
         **kwargs: Any
     ) -> ChatResponse:
         
@@ -209,7 +209,9 @@ class MLXChatClient(BaseChatClient):
         logits_processors = self._get_logits_processors(options)
         
         # Determine max_tokens: Option -> Config -> Default
-        max_tokens = options.get("max_tokens") if options.get("max_tokens") else self.generation_config.max_tokens
+        max_tokens = self.generation_config.max_tokens
+        if options.get("max_tokens"):
+             max_tokens = options["max_tokens"]
 
         seed = self.generation_config.seed
         if "seed" in options:
@@ -260,7 +262,7 @@ class MLXChatClient(BaseChatClient):
         self, 
         *, 
         messages: MutableSequence[ChatMessage],  
-        options: MLXChatOptions, 
+        options: MLXChatOptions = {}, 
         **kwargs: Any
     ) -> AsyncIterable[ChatResponseUpdate]:
         
@@ -270,7 +272,11 @@ class MLXChatClient(BaseChatClient):
         prompt = self._prepare_prompt(list(messages))
         sampler = self._get_sampler(options)
         logits_processors = self._get_logits_processors(options)
-        max_tokens = options.get("max_tokens") if options.get("max_tokens") else self.generation_config.max_tokens
+        
+        # Determine max_tokens: Option -> Config -> Default
+        max_tokens = self.generation_config.max_tokens
+        if options.get("max_tokens"):
+             max_tokens = options["max_tokens"]
 
         seed = self.generation_config.seed
         if "seed" in options:
