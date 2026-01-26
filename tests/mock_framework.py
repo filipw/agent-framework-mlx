@@ -1,5 +1,7 @@
-from typing import Any, List, Optional, Union, ClassVar, TypedDict
+from typing import Any, List, Optional, Union, ClassVar, TypedDict, Generic, TypeVar
 from pydantic import BaseModel, ConfigDict
+
+TOptions_co = TypeVar("TOptions_co", bound=TypedDict, covariant=True)
 
 def use_chat_middleware(cls):
     return cls
@@ -93,7 +95,7 @@ class ChatResponseUpdate(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-class BaseChatClient:
+class BaseChatClient(Generic[TOptions_co]):
     def __init__(self, **kwargs):
         pass
     

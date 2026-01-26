@@ -64,7 +64,7 @@ class MLXChatOptions(ChatOptions, total=False):
 @use_function_invocation
 @use_instrumentation
 @use_chat_middleware
-class MLXChatClient(BaseChatClient):
+class MLXChatClient(BaseChatClient[MLXChatOptions]):
     """
     A Chat Client that runs models locally using Apple MLX.
     """
@@ -148,25 +148,25 @@ class MLXChatClient(BaseChatClient):
         # Fallback
         return "\n".join([f"{m['role']}: {m['content']}" for m in msg_dicts])
 
-    def _get_sampler(self, options: Optional[MLXChatOptions] = None):
+    def _get_sampler(self, options: MLXChatOptions = {}):
         """Creates the MLX sampler, overriding defaults with ChatOptions if provided."""
         config = self.generation_config.model_dump()
         
         if options:
-            if options.get("temperature") is not None:
-                config["temp"] = options["temperature"]
-            if options.get("top_p") is not None:
-                config["top_p"] = options["top_p"]
+            if (temp := options.get("temperature")) is not None:
+                config["temp"] = temp
+            if (top_p := options.get("top_p")) is not None:
+                config["top_p"] = top_p
             
             # Additional properties are now directly in the TypedDict
-            if "min_p" in options:
-                config["min_p"] = float(options["min_p"])
-            if "top_k" in options:
-                config["top_k"] = int(options["top_k"])
-            if "xtc_probability" in options:
-                config["xtc_probability"] = float(options["xtc_probability"])
-            if "xtc_threshold" in options:
-                config["xtc_threshold"] = float(options["xtc_threshold"])
+            if (min_p := options.get("min_p")) is not None:
+                config["min_p"] = float(min_p)
+            if (top_k := options.get("top_k")) is not None:
+                config["top_k"] = int(top_k)
+            if (xtc_prob := options.get("xtc_probability")) is not None:
+                config["xtc_probability"] = float(xtc_prob)
+            if (xtc_thresh := options.get("xtc_threshold")) is not None:
+                config["xtc_threshold"] = float(xtc_thresh)
 
         return make_sampler(
             temp=config["temp"],
@@ -178,15 +178,15 @@ class MLXChatClient(BaseChatClient):
             xtc_threshold=config["xtc_threshold"]
         )
 
-    def _get_logits_processors(self, options: Optional[MLXChatOptions] = None):
+    def _get_logits_processors(self, options: MLXChatOptions = {}):
         """Creates the MLX logits processors."""
         config = self.generation_config.model_dump()
         
         if options:
-            if "repetition_penalty" in options:
-                config["repetition_penalty"] = float(options["repetition_penalty"])
-            if "repetition_context_size" in options:
-                config["repetition_context_size"] = int(options["repetition_context_size"])
+            if (rep_pen := options.get("repetition_penalty")) is not None:
+                config["repetition_penalty"] = float(rep_pen)
+            if (rep_ctx := options.get("repetition_context_size")) is not None:
+                config["repetition_context_size"] = int(rep_ctx)
 
         return make_logits_processors(
             repetition_penalty=config.get("repetition_penalty"),
@@ -197,7 +197,7 @@ class MLXChatClient(BaseChatClient):
         self, 
         *, 
         messages: MutableSequence[ChatMessage], 
-        options: MLXChatOptions, 
+        options: MLXChatOptions = {}, 
         **kwargs: Any
     ) -> ChatResponse:
         
@@ -209,11 +209,13 @@ class MLXChatClient(BaseChatClient):
         logits_processors = self._get_logits_processors(options)
         
         # Determine max_tokens: Option -> Config -> Default
-        max_tokens = options.get("max_tokens") if options.get("max_tokens") else self.generation_config.max_tokens
+        max_tokens = self.generation_config.max_tokens
+        if (opt_max_tokens := options.get("max_tokens")) is not None:
+             max_tokens = opt_max_tokens
 
         seed = self.generation_config.seed
-        if "seed" in options:
-            seed = int(options["seed"]) # type: ignore
+        if (opt_seed := options.get("seed")) is not None:
+            seed = int(opt_seed) 
         
         generate_kwargs = {}
         if seed is not None:
@@ -260,7 +262,7 @@ class MLXChatClient(BaseChatClient):
         self, 
         *, 
         messages: MutableSequence[ChatMessage],  
-        options: MLXChatOptions, 
+        options: MLXChatOptions = {}, 
         **kwargs: Any
     ) -> AsyncIterable[ChatResponseUpdate]:
         
@@ -270,11 +272,15 @@ class MLXChatClient(BaseChatClient):
         prompt = self._prepare_prompt(list(messages))
         sampler = self._get_sampler(options)
         logits_processors = self._get_logits_processors(options)
-        max_tokens = options.get("max_tokens") if options.get("max_tokens") else self.generation_config.max_tokens
+        
+        # Determine max_tokens: Option -> Config -> Default
+        max_tokens = self.generation_config.max_tokens
+        if (opt_max_tokens := options.get("max_tokens")) is not None:
+             max_tokens = opt_max_tokens
 
         seed = self.generation_config.seed
-        if "seed" in options:
-            seed = int(options["seed"]) # type: ignore
+        if (opt_seed := options.get("seed")) is not None:
+            seed = int(opt_seed) 
         
         generate_kwargs = {}
         if seed is not None:

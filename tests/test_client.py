@@ -145,3 +145,34 @@ async def test_streaming_response(mock_mlx):
         response_text += update.text
         
     assert response_text == "Mock Chunk"
+
+@pytest.mark.asyncio
+async def test_hierarchical_configuration(mock_mlx):
+    # setup client with custom config
+    config = MLXGenerationConfig(temp=0.9, max_tokens=123, seed=99)
+    client = MLXChatClient(model_path="test/model", generation_config=config)
+    messages = [ChatMessage(role=Role.USER, text="Hi")]
+    
+    # 1. test fallback to config when options are empty
+    await client._inner_get_response(messages=messages, options=MLXChatOptions())
+    
+    # verify make_sampler was called with config values
+    agent_framework_mlx.client.make_sampler.assert_called()
+    sampler_args = agent_framework_mlx.client.make_sampler.call_args[1]
+    assert sampler_args["temp"] == 0.9
+    
+    # verify generate was called with config values
+    args, kwargs = agent_framework_mlx.client.generate.call_args
+    assert kwargs["max_tokens"] == 123
+    assert kwargs["seed"] == 99
+
+    # 2. test override of config when options are provided
+    override_options = MLXChatOptions(temperature=0.1, max_tokens=456, seed=1)
+    await client._inner_get_response(messages=messages, options=override_options)
+    
+    sampler_args_override = agent_framework_mlx.client.make_sampler.call_args[1]
+    assert sampler_args_override["temp"] == 0.1
+    
+    args_override, kwargs_override = agent_framework_mlx.client.generate.call_args
+    assert kwargs_override["max_tokens"] == 456
+    assert kwargs_override["seed"] == 1
