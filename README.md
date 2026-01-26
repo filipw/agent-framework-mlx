@@ -53,7 +53,7 @@ messages = [
 ]
 
 # Get response
-response = await client.get_response(messages=messages, chat_options=ChatOptions())
+response = await client.get_response(messages=messages)
 print(response.text)
 ```
 
@@ -113,7 +113,7 @@ workflow = builder.build()
 ### Streaming
 
 ```python
-async for update in client.get_streaming_response(messages=messages, chat_options=ChatOptions()):
+async for update in client.get_streaming_response(messages=messages):
     print(update.text, end="", flush=True)
 ```
 
@@ -132,7 +132,7 @@ client = MLXChatClient()
 
 ### Advanced Configuration
 
-You can configure generation parameters globally via `MLXGenerationConfig` or per-request via `ChatOptions`.
+You can configure generation parameters globally via `MLXGenerationConfig` or per-request via `MLXChatOptions`.
 
 ```python
 config = MLXGenerationConfig(
