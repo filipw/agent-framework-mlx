@@ -10,7 +10,6 @@ import mock_framework
 
 sys.modules["agent_framework"] = mock_framework
 sys.modules["agent_framework.observability"] = mock_framework
-sys.modules["agent_framework._pydantic"] = mock_framework
 sys.modules["agent_framework.exceptions"] = mock_framework
 
 @pytest.fixture

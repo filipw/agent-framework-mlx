@@ -59,7 +59,7 @@ async def main():
     print(f"\n📝 User: {prompt_text_stream}\n")
     print("🤖 Assistant: ", end="", flush=True)
     
-    async for update in agent.run_stream(prompt_text_stream):
+    async for update in agent.run(prompt_text_stream, stream=True):
         if update.text:
             print(update.text, end="", flush=True)
     print("\n")
