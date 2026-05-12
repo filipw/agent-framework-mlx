@@ -5,7 +5,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
 
 try:
-    from agent_framework import ChatMessage, Role, Content
+    from agent_framework import Message, Content
     from agent_framework_mlx import MLXChatClient, MLXGenerationConfig
     from agent_framework_mlx.client import MLXChatOptions
 except ImportError as e:
@@ -34,8 +34,8 @@ async def main():
     print(f"\n📝 User: {prompt_text}\n")
     
     messages = [
-        ChatMessage(role=Role.SYSTEM, text="You are a helpful assistant."),
-        ChatMessage(role=Role.USER, text=prompt_text)
+        Message("system", ["You are a helpful assistant."]),
+        Message("user", [prompt_text])
     ]
     
     # MLXGenerationConfig are the defaults
@@ -52,7 +52,7 @@ async def main():
     
     # they can be overridden with an MLXChatOptions dictionary
     options: MLXChatOptions = {"temperature": 0.7}
-    async for update in client.get_streaming_response(messages=messages, options=options):
+    async for update in client.get_response(messages=messages, options=options, stream=True):
         if update.text:
             print(update.text, end="", flush=True)
         

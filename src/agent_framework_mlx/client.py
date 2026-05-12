@@ -1,22 +1,22 @@
 import asyncio
 import logging
-from typing import Any, AsyncIterable, MutableSequence, Optional, Callable, ClassVar, TypedDict
+from typing import Any, AsyncIterable, MutableSequence, Optional, Callable, TypedDict
 from pydantic import BaseModel
 from agent_framework import (
-    BaseChatClient, 
-    ChatMessage, 
+    BaseChatClient,
+    ChatMiddlewareLayer,
+    FunctionInvocationLayer,
+    Message,
     ChatOptions, 
     ChatResponse, 
-    ChatResponseUpdate, 
-    Role, 
+    ChatResponseUpdate,
+    ResponseStream,
     Content,
     UsageDetails,
-    use_chat_middleware,
-    use_function_invocation
+    load_settings,
 )
-from agent_framework.observability import use_instrumentation
-from agent_framework._pydantic import AFBaseSettings
-from agent_framework.exceptions import ServiceInitializationError
+from agent_framework.observability import ChatTelemetryLayer
+from agent_framework.exceptions import IntegrationInitializationError
 from mlx_lm.utils import load
 from mlx_lm.generate import generate, stream_generate
 from mlx_lm.sample_utils import make_sampler, make_logits_processors
@@ -39,7 +39,7 @@ class MLXGenerationConfig(BaseModel):
     seed: Optional[int] = None
     verbose: bool = False
 
-class MLXSettings(AFBaseSettings):
+class MLXSettings(TypedDict, total=False):
     """
     MLX Client settings.
     
@@ -47,10 +47,8 @@ class MLXSettings(AFBaseSettings):
         model_path: The path to the MLX model. (Env var MLX_MODEL_PATH)
         adapter_path: Optional path to an adapter. (Env var MLX_ADAPTER_PATH)
     """
-    env_prefix: ClassVar[str] = "MLX_"
-    
-    model_path: str
-    adapter_path: Optional[str] = None
+    model_path: Optional[str]
+    adapter_path: Optional[str]
 
 class MLXChatOptions(ChatOptions, total=False):
     """MLX-specific Chat Options."""
@@ -61,10 +59,7 @@ class MLXChatOptions(ChatOptions, total=False):
     repetition_penalty: float
     repetition_context_size: int
 
-@use_function_invocation
-@use_instrumentation
-@use_chat_middleware
-class MLXChatClient(BaseChatClient[MLXChatOptions]):
+class MLXChatClient(ChatMiddlewareLayer[MLXChatOptions], FunctionInvocationLayer[MLXChatOptions], ChatTelemetryLayer[MLXChatOptions], BaseChatClient[MLXChatOptions]):
     """
     A Chat Client that runs models locally using Apple MLX.
     """
@@ -81,11 +76,14 @@ class MLXChatClient(BaseChatClient[MLXChatOptions]):
         env_file_encoding: str = "utf-8",
         **kwargs: Any
     ):
-        settings = MLXSettings(
-            model_path=model_path, # type: ignore
-            adapter_path=adapter_path,
+        settings = load_settings(
+            MLXSettings,
+            env_prefix="MLX_",
             env_file_path=env_file_path,
-            env_file_encoding=env_file_encoding
+            env_file_encoding=env_file_encoding,
+            required_fields=["model_path"],
+            model_path=model_path,
+            adapter_path=adapter_path,
         )
 
         super().__init__(**kwargs)
@@ -93,42 +91,35 @@ class MLXChatClient(BaseChatClient[MLXChatOptions]):
         self.generation_config = generation_config or MLXGenerationConfig()
         self.message_preprocessor = message_preprocessor
         
-        logger.info(f"Loading MLX Model: {settings.model_path}...")
+        logger.info(f"Loading MLX Model: {settings['model_path']}...")
         loaded = load(
-            settings.model_path,
-            adapter_path=settings.adapter_path,
+            settings["model_path"],
+            adapter_path=settings.get("adapter_path"),
             tokenizer_config=tokenizer_config or {}
         ) # type: ignore
         
         # Handle variable return length from mlx_lm.load
         if isinstance(loaded, tuple):
             self.model = loaded[0]
-            self.tokenizer = loaded[1]
+            self.mlx_tokenizer = loaded[1]
         else:
             self.model = loaded
-            self.tokenizer = None 
+            self.mlx_tokenizer = None 
 
-        if self.tokenizer is None:
-            raise ServiceInitializationError("Failed to load tokenizer from model path.")
+        if self.mlx_tokenizer is None:
+            raise IntegrationInitializationError("Failed to load tokenizer from model path.")
 
-        self.model_id = settings.model_path
+        self.model_id = settings["model_path"]
 
-    def _prepare_prompt(self, messages: list[ChatMessage]) -> str:
+    def _prepare_prompt(self, messages: list[Message]) -> str:
         """
-        Converts strongly typed ChatMessage objects to the dictionary format 
+        Converts strongly typed Message objects to the dictionary format 
         expected by the MLX/HuggingFace tokenizer apply_chat_template.
         """
         msg_dicts: list[dict[str, str]] = []
         
         for m in messages:
-            role_str: str
-            if isinstance(m.role, Role):
-                role_str = m.role.value
-            elif isinstance(m.role, str):
-                role_str = m.role
-            else:
-                # Fallback for dict representation or other EnumLikes
-                role_str = str(m.role)
+            role_str = str(m.role)
 
             # Ensure we get text content
             content_str = m.text if hasattr(m, "text") else str(m.contents)
@@ -138,8 +129,8 @@ class MLXChatClient(BaseChatClient[MLXChatOptions]):
         if self.message_preprocessor:
             msg_dicts = self.message_preprocessor(msg_dicts)
 
-        if self.tokenizer is not None and hasattr(self.tokenizer, "apply_chat_template"):
-            return self.tokenizer.apply_chat_template(
+        if self.mlx_tokenizer is not None and hasattr(self.mlx_tokenizer, "apply_chat_template"):
+            return self.mlx_tokenizer.apply_chat_template(
                 msg_dicts, 
                 tokenize=False, 
                 add_generation_prompt=True
@@ -193,15 +184,15 @@ class MLXChatClient(BaseChatClient[MLXChatOptions]):
             repetition_context_size=config.get("repetition_context_size")
         )
 
-    async def _inner_get_response(
+    def _inner_get_response(
         self, 
         *, 
-        messages: MutableSequence[ChatMessage], 
+        messages: MutableSequence[Message],
+        stream: bool = False,
         options: MLXChatOptions = {}, 
         **kwargs: Any
-    ) -> ChatResponse:
-        
-        if self.tokenizer is None:
+    ):
+        if self.mlx_tokenizer is None:
              raise ValueError("Tokenizer is not initialized.")
 
         prompt = self._prepare_prompt(list(messages))
@@ -221,10 +212,24 @@ class MLXChatClient(BaseChatClient[MLXChatOptions]):
         if seed is not None:
             generate_kwargs["seed"] = seed
 
+        if stream:
+            return ResponseStream(self._stream(prompt, max_tokens, sampler, logits_processors, generate_kwargs), finalizer=ChatResponse.from_updates)
+
+        return self._do_get_response(prompt, max_tokens, sampler, logits_processors, generate_kwargs, options)
+
+    async def _do_get_response(
+        self,
+        prompt: str,
+        max_tokens: int,
+        sampler: Any,
+        logits_processors: Any,
+        generate_kwargs: dict,
+        options: MLXChatOptions,
+    ):
         response_text = await asyncio.to_thread(
             generate,
             model=self.model,
-            tokenizer=self.tokenizer,
+            tokenizer=self.mlx_tokenizer,
             prompt=prompt,
             max_tokens=max_tokens,
             sampler=sampler,
@@ -236,15 +241,15 @@ class MLXChatClient(BaseChatClient[MLXChatOptions]):
         # 1. Create TextContent
         content = Content.from_text(text=response_text)
         
-        # 2. Create ChatMessage
-        message = ChatMessage(
-            role=Role.ASSISTANT, 
-            contents=[content]
+        # 2. Create Message
+        message = Message(
+            "assistant",
+            [content]
         )
 
         # 3. Calculate usage
-        prompt_tokens = len(self.tokenizer.encode(prompt)) # type: ignore
-        completion_tokens = len(self.tokenizer.encode(response_text)) # type: ignore
+        prompt_tokens = len(self.mlx_tokenizer.encode(prompt)) # type: ignore
+        completion_tokens = len(self.mlx_tokenizer.encode(response_text)) # type: ignore
         usage = UsageDetails(
             input_token_count=prompt_tokens,
             output_token_count=completion_tokens,
@@ -254,37 +259,20 @@ class MLXChatClient(BaseChatClient[MLXChatOptions]):
         # 4. Create ChatResponse
         return ChatResponse(
             messages=[message],
-            model_id=self.model_id,
+            model=self.model_id,
             usage_details=usage
         )
 
-    async def _inner_get_streaming_response(
-        self, 
-        *, 
-        messages: MutableSequence[ChatMessage],  
-        options: MLXChatOptions = {}, 
-        **kwargs: Any
+    async def _stream(
+        self,
+        prompt: str,
+        max_tokens: int,
+        sampler: Any,
+        logits_processors: Any,
+        generate_kwargs: dict,
     ) -> AsyncIterable[ChatResponseUpdate]:
-        
-        if self.tokenizer is None:
+        if self.mlx_tokenizer is None:
              raise ValueError("Tokenizer is not initialized.")
-
-        prompt = self._prepare_prompt(list(messages))
-        sampler = self._get_sampler(options)
-        logits_processors = self._get_logits_processors(options)
-        
-        # Determine max_tokens: Option -> Config -> Default
-        max_tokens = self.generation_config.max_tokens
-        if (opt_max_tokens := options.get("max_tokens")) is not None:
-             max_tokens = opt_max_tokens
-
-        seed = self.generation_config.seed
-        if (opt_seed := options.get("seed")) is not None:
-            seed = int(opt_seed) 
-        
-        generate_kwargs = {}
-        if seed is not None:
-            generate_kwargs["seed"] = seed
 
         # Get the synchronous generator from MLX
         # We need to run this in a thread to avoid blocking the event loop
@@ -295,7 +283,7 @@ class MLXChatClient(BaseChatClient[MLXChatOptions]):
             try:
                 generation_stream = stream_generate(
                     model=self.model,
-                    tokenizer=self.tokenizer, # type: ignore
+                    tokenizer=self.mlx_tokenizer, # type: ignore
                     prompt=prompt,
                     max_tokens=max_tokens,
                     sampler=sampler,
@@ -333,15 +321,15 @@ class MLXChatClient(BaseChatClient[MLXChatOptions]):
             content = Content.from_text(text=item.text)
             
             yield ChatResponseUpdate(
-                role=Role.ASSISTANT, 
+                role="assistant", 
                 contents=[content], 
-                model_id=self.model_id
+                model=self.model_id
             )
         
         # Yield usage at the end if we captured it
         if last_usage:
             yield ChatResponseUpdate(
-                role=Role.ASSISTANT,
+                role="assistant",
                 contents=[Content.from_usage(usage_details=last_usage)],
-                model_id=self.model_id
+                model=self.model_id
             )
