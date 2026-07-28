@@ -50,6 +50,9 @@ class Content(BaseModel):
     type: str
     text: Optional[str] = None
     usage_details: Optional[dict[str, Any]] = None
+    call_id: Optional[str] = None
+    name: Optional[str] = None
+    arguments: Optional[Any] = None
 
     @classmethod
     def from_text(cls, text: str):
@@ -58,6 +61,10 @@ class Content(BaseModel):
     @classmethod
     def from_usage(cls, usage_details: dict[str, Any]):
         return cls(type="usage", usage_details=usage_details)
+
+    @classmethod
+    def from_function_call(cls, call_id: str, name: str, *, arguments: Optional[Any] = None):
+        return cls(type="function_call", call_id=call_id, name=name, arguments=arguments)
 
 class UsageDetails(dict):
     pass
@@ -79,6 +86,16 @@ class Message:
     def text(self):
         return "".join([c.text for c in self.contents if c.type == "text" and c.text is not None])
 
+
+def prepend_instructions_to_messages(messages, instructions, role="system"):
+    """Minimal mock of agent_framework.prepend_instructions_to_messages."""
+    if not instructions:
+        return messages
+    if isinstance(instructions, str):
+        instructions = [instructions]
+    prepended = [Message(role=role, text=instr) for instr in instructions]
+    return prepended + list(messages)
+
 class ChatOptions(TypedDict, total=False):
     temperature: Optional[float]
     max_tokens: Optional[int]
@@ -90,6 +107,9 @@ class ChatOptions(TypedDict, total=False):
     xtc_threshold: Optional[float]
     repetition_penalty: Optional[float]
     repetition_context_size: Optional[int]
+    tools: Optional[Any]
+    tool_choice: Optional[Any]
+    instructions: Optional[str]
 
 class ChatResponse(BaseModel):
     messages: List[Message]
@@ -135,6 +155,15 @@ class BaseChatClient(Generic[TOptions_co]):
 
 def load_settings(settings_type, *, env_prefix="", env_file_path=None, env_file_encoding=None, required_fields=None, **overrides):
     return {k: v for k, v in overrides.items() if v is not None}
+
+
+def normalize_tools(tools):
+    """Minimal mock of agent_framework.normalize_tools: wraps a single tool into a list."""
+    if not tools:
+        return []
+    if isinstance(tools, (str, bytes, dict)) or not isinstance(tools, (list, tuple)):
+        return [tools]
+    return list(tools)
 
 
 class IntegrationInitializationError(Exception):
