@@ -23,7 +23,10 @@ def calculate_bmi(
     return f"{bmi:.2f}"
 
 async def main():
-    model_path = "mlx-community/Phi-4-mini-instruct-4bit"
+    # NOTE: function calling requires the model to reliably emit Phi's
+    # `<|tool_call|>[...]<|/tool_call|>` syntax. The 4-bit quantization of this model is
+    # not reliable at this; the 8-bit quantization follows the format correctly.
+    model_path = "mlx-community/Phi-4-mini-instruct-8bit"
     
     print(f"--- 🚀 Loading MLX Model: {model_path} ---")
     

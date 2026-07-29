@@ -1,10 +1,11 @@
 import pytest
+import json
 from unittest.mock import MagicMock, patch
 from agent_framework import Message, ChatOptions
 from agent_framework.exceptions import IntegrationInitializationError
 import agent_framework_mlx.client
 from agent_framework_mlx import MLXChatClient, MLXGenerationConfig
-from agent_framework_mlx.client import MLXChatOptions
+from agent_framework_mlx.client import MLXChatOptions, _tool_to_function_spec, _extract_tool_calls
 
 @pytest.mark.asyncio
 async def test_client_initialization(mock_mlx):
@@ -104,6 +105,19 @@ async def test_prepare_prompt_fallback(mock_mlx):
     assert prompt == "user: Hi"
 
 @pytest.mark.asyncio
+async def test_instructions_prepended_as_system_message(mock_mlx):
+    client = MLXChatClient(model_path="test/model")
+    messages = [Message(role="user", text="Hi")]
+    options = MLXChatOptions(instructions="You are a helpful health assistant.")
+
+    await client._inner_get_response(messages=messages, options=options)
+
+    call_args = client.mlx_tokenizer.apply_chat_template.call_args #type: ignore
+    passed_msgs = call_args[0][0]
+    assert passed_msgs[0]["role"] == "system"
+    assert passed_msgs[0]["content"] == "You are a helpful health assistant."
+
+@pytest.mark.asyncio
 async def test_message_preprocessor(mock_mlx):
     def add_instruction(messages):
         if messages:
@@ -178,3 +192,195 @@ async def test_hierarchical_configuration(mock_mlx):
     args_override, kwargs_override = agent_framework_mlx.client.generate.call_args
     assert kwargs_override["max_tokens"] == 456
     assert kwargs_override["seed"] == 1
+
+
+# --- Tool calling ---
+
+def test_tool_to_function_spec_from_dict():
+    tool = {
+        "name": "calculate_bmi",
+        "description": "Calculates BMI",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "weight_kg": {"type": "number", "description": "Weight in kg"},
+                "height_m": {"type": "number", "description": "Height in meters"},
+                "unit": {"type": "string", "description": "Unit system", "default": "metric"},
+            },
+            "required": ["weight_kg", "height_m"],
+        },
+    }
+
+    spec = _tool_to_function_spec(tool)
+
+    assert spec == {
+        "name": "calculate_bmi",
+        "description": "Calculates BMI",
+        "parameters": {
+            "weight_kg": {"type": "number", "description": "Weight in kg"},
+            "height_m": {"type": "number", "description": "Height in meters"},
+            "unit": {"type": "string", "description": "Unit system", "default": "metric"},
+        },
+    }
+
+def test_tool_to_function_spec_from_openai_style_dict():
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the weather",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string", "description": "City name"}},
+                "required": ["city"],
+            },
+        },
+    }
+
+    spec = _tool_to_function_spec(tool)
+
+    assert spec == {
+        "name": "get_weather",
+        "description": "Get the weather",
+        "parameters": {"city": {"type": "string", "description": "City name"}},
+    }
+
+def test_tool_to_function_spec_from_object():
+    tool = MagicMock()
+    tool.name = "get_weather"
+    tool.description = "Get the weather"
+    tool.parameters.return_value = {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+    }
+
+    spec = _tool_to_function_spec(tool)
+
+    assert spec == {
+        "name": "get_weather",
+        "description": "Get the weather",
+        "parameters": {"city": {"type": "string"}},
+    }
+
+def test_tool_to_function_spec_unknown_shape_returns_none():
+    assert _tool_to_function_spec({"description": "no name here"}) is None
+
+def test_extract_tool_calls_plain_json():
+    text = '[{"name": "calculate_bmi", "arguments": {"weight_kg": 70, "height_m": 1.75}}]'
+    assert _extract_tool_calls(text) == [
+        {"name": "calculate_bmi", "arguments": {"weight_kg": 70, "height_m": 1.75}}
+    ]
+
+def test_extract_tool_calls_with_surrounding_text():
+    text = 'Sure, here it is: [{"name": "calculate_bmi", "arguments": {"weight_kg": 70}}] done.'
+    assert _extract_tool_calls(text) == [{"name": "calculate_bmi", "arguments": {"weight_kg": 70}}]
+
+def test_extract_tool_calls_returns_none_for_plain_text():
+    assert _extract_tool_calls("Your BMI is approximately 22.86.") is None
+
+def test_extract_tool_calls_handles_tool_call_tags_and_trailing_hallucination():
+    # Real-world Phi output: tagged tool call followed by a fabricated follow-up turn.
+    text = (
+        '<|tool_call|>[{"name": "get_weather_updates", "arguments": {"city": "Paris"}}]'
+        '<|/tool_call|><|user|>How do I use this? Here is an example: [1, 2, 3]'
+    )
+    assert _extract_tool_calls(text) == [
+        {"name": "get_weather_updates", "arguments": {"city": "Paris"}}
+    ]
+
+@pytest.mark.asyncio
+async def test_prepare_prompt_injects_tools_into_system_message(mock_mlx):
+    client = MLXChatClient(model_path="test/model")
+    messages = [Message(role="system", text="You are helpful."), Message(role="user", text="Hi")]
+    tool_specs = [{"name": "calculate_bmi", "description": "d", "parameters": {}}]
+
+    client._prepare_prompt(messages, tool_specs)
+
+    call_args = client.mlx_tokenizer.apply_chat_template.call_args #type: ignore
+    passed_msgs = call_args[0][0]
+    assert passed_msgs[0]["role"] == "system"
+    assert json.loads(passed_msgs[0]["tools"]) == tool_specs
+
+@pytest.mark.asyncio
+async def test_prepare_prompt_creates_system_message_for_tools_if_missing(mock_mlx):
+    client = MLXChatClient(model_path="test/model")
+    messages = [Message(role="user", text="Hi")]
+    tool_specs = [{"name": "calculate_bmi", "description": "d", "parameters": {}}]
+
+    client._prepare_prompt(messages, tool_specs)
+
+    call_args = client.mlx_tokenizer.apply_chat_template.call_args #type: ignore
+    passed_msgs = call_args[0][0]
+    assert passed_msgs[0]["role"] == "system"
+    assert json.loads(passed_msgs[0]["tools"]) == tool_specs
+
+@pytest.mark.asyncio
+async def test_tool_call_detected_in_response(mock_mlx):
+    client = MLXChatClient(model_path="test/model")
+    messages = [Message(role="user", text="What is my BMI?")]
+    tools = [{
+        "name": "calculate_bmi",
+        "description": "Calculates BMI",
+        "parameters": {
+            "type": "object",
+            "properties": {"weight_kg": {"type": "number"}, "height_m": {"type": "number"}},
+            "required": ["weight_kg", "height_m"],
+        },
+    }]
+    options = MLXChatOptions(tools=tools)
+
+    agent_framework_mlx.client.generate.return_value = (
+        '[{"name": "calculate_bmi", "arguments": {"weight_kg": 70, "height_m": 1.75}}]'
+    )
+
+    response = await client._inner_get_response(messages=messages, options=options)
+
+    result_content = response.messages[0].contents[0]
+    assert result_content.type == "function_call"
+    assert result_content.name == "calculate_bmi"
+    assert result_content.arguments == {"weight_kg": 70, "height_m": 1.75}
+
+@pytest.mark.asyncio
+async def test_no_tool_call_falls_back_to_text(mock_mlx):
+    client = MLXChatClient(model_path="test/model")
+    messages = [Message(role="user", text="What is my BMI?")]
+    tools = [{"name": "calculate_bmi", "description": "d", "parameters": {}}]
+    options = MLXChatOptions(tools=tools)
+
+    agent_framework_mlx.client.generate.return_value = "Your BMI is approximately 22.86."
+
+    response = await client._inner_get_response(messages=messages, options=options)
+
+    result_content = response.messages[0].contents[0]
+    assert result_content.type == "text"
+    assert result_content.text == "Your BMI is approximately 22.86."
+
+@pytest.mark.asyncio
+async def test_streaming_tool_call_yields_function_call_update(mock_mlx):
+    client = MLXChatClient(model_path="test/model")
+    messages = [Message(role="user", text="What is my BMI?")]
+    tools = [{"name": "calculate_bmi", "description": "d", "parameters": {}}]
+    options = MLXChatOptions(tools=tools)
+
+    tool_call_json = '[{"name": "calculate_bmi", "arguments": {"weight_kg": 70, "height_m": 1.75}}]'
+
+    def mock_stream(*args, **kwargs):
+        class Chunk:
+            def __init__(self, text):
+                self.text = text
+        for piece in [tool_call_json[:10], tool_call_json[10:]]:
+            yield Chunk(piece)
+
+    with patch("agent_framework_mlx.client.stream_generate", side_effect=mock_stream):
+        updates = [
+            update async for update in client._inner_get_response(messages=messages, stream=True, options=options)
+        ]
+
+    function_call_updates = [u for u in updates for c in u.contents if c.type == "function_call"]
+    assert len(function_call_updates) == 1
+    call_content = function_call_updates[0].contents[0]
+    assert call_content.name == "calculate_bmi"
+    assert call_content.arguments == {"weight_kg": 70, "height_m": 1.75}
+    # raw JSON chunks must not leak out as text updates
+    assert not any(c.type == "text" for u in updates for c in u.contents)
